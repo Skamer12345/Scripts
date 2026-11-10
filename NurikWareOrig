@@ -1,0 +1,707 @@
+-- ============================================
+-- NurikWare v6.1 | World FX + Instant KA + Fix Distance
+-- ============================================
+
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting = game:GetService("Lighting")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local CreatedHighlights = {}
+local CreatedDrawings  = {}
+local SelfSpheres      = {}
+local Connections      = {}
+local Unloaded         = false
+
+local OriginalLighting = {
+    Brightness = Lighting.Brightness,
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    FogEnd = Lighting.FogEnd,
+    FogStart = Lighting.FogStart,
+    FogColor = Lighting.FogColor,
+}
+local OriginalFOV = Camera.FieldOfView
+
+-- ============================================
+-- НАСТРОЙКИ
+-- ============================================
+local Settings = {
+    -- ESP
+    ESPEnabled      = false,
+    ESPBox          = true,
+    ESPName         = true,
+    ESPHealth       = true,
+    ESPDistance     = true,
+    ESPTracer       = false,
+    ESPSkeleton     = true,
+    ESPChams        = true,
+    ESPWeapon       = true,
+    ESPSnapLine     = false,
+    ESPTeamCheck    = false,
+    ESPChamsMat     = "Neon",
+    ESPColor        = Color3.fromRGB(255, 0, 0),
+    ESPTextColor    = Color3.fromRGB(255, 255, 255),
+    ESPMaxDistance  = 1000,
+
+    -- World Visuals
+    Fullbright      = false,
+    NoFog           = false,
+    AmbientColor    = Color3.fromRGB(255, 255, 255),
+    CustomSky       = false,
+    FOVChanger      = false,
+    FOVValue        = 90,
+    PlayerGlow      = false,
+
+    -- Self Chams
+    SelfEnabled     = false,
+    SelfMode        = "Orbit",
+    SelfCount       = 3,
+    SelfSize        = 1,
+    SelfRadius      = 3,
+    SelfSpeed       = 2,
+    SelfColor       = Color3.fromRGB(0, 255, 255),
+    SelfMaterial    = "Neon",
+
+    -- Kill Aura
+    KAEnabled       = false,
+    KARadius        = 1000,
+    KAMode          = "All", -- Вернул Closest/All
+    KACrit          = true,
+    KACharge        = 5,
+    KASprint        = false,
+    KAPacketCounter = 5965,
+    KAPerTargetCD   = 0.1,
+    KALastHit       = {},
+}
+
+-- ============================================
+-- УТИЛИТЫ
+-- ============================================
+local function safeDisconnect(conn)
+    if conn and typeof(conn) == "RBXScriptConnection" then pcall(function() conn:Disconnect() end) end
+end
+local function addConnection(conn) table.insert(Connections, conn); return conn end
+local function clearTable(t) for k in pairs(t) do t[k] = nil end end
+
+-- ИСПРАВЛЕННЫЙ ПОИСК ПЕРСОНАЖА (Для дистанции и ESP)
+local function getPlayerCharacter(player)
+    if not player then return nil end
+    
+    -- 1. Стандартный Character
+    local char = player.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then 
+        return char 
+    end
+    
+    -- 2. Поиск по имени игрока в Workspace (как на твоем скрине)
+    local wsChar = workspace:FindFirstChild(player.Name)
+    if wsChar and wsChar:FindFirstChild("HumanoidRootPart") then 
+        return wsChar 
+    end
+    
+    -- 3. Поиск любой Model с именем игрока
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("Model") and obj.Name == player.Name and obj:FindFirstChild("HumanoidRootPart") then
+            return obj
+        end
+    end
+    return nil
+end
+
+-- ============================================
+-- WORLD VISUALS
+-- ============================================
+local function updateWorldVisuals()
+    if Unloaded then return end
+
+    if Settings.Fullbright then
+        Lighting.Brightness = 2
+        Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+        Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+    else
+        Lighting.Brightness = OriginalLighting.Brightness
+        Lighting.Ambient = OriginalLighting.Ambient
+        Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+    end
+
+    if Settings.NoFog then
+        Lighting.FogEnd = 100000
+        Lighting.FogStart = 100000
+        Lighting.FogColor = Color3.fromRGB(255, 255, 255)
+    else
+        Lighting.FogEnd = OriginalLighting.FogEnd
+        Lighting.FogStart = OriginalLighting.FogStart
+        Lighting.FogColor = OriginalLighting.FogColor
+    end
+
+    if Settings.Fullbright then
+         Lighting.Ambient = Settings.AmbientColor
+         Lighting.OutdoorAmbient = Settings.AmbientColor
+    end
+
+    if Settings.FOVChanger then
+        Camera.FieldOfView = Settings.FOVValue
+    else
+        Camera.FieldOfView = OriginalFOV
+    end
+
+    if Settings.CustomSky then
+        local sky = Lighting:FindFirstChild("NurikWare_Sky")
+        if not sky then
+            sky = Instance.new("Sky")
+            sky.Name = "NurikWare_Sky"
+            sky.SkyboxBk = "rbxassetid://159454299"
+            sky.SkyboxDn = "rbxassetid://159454299"
+            sky.SkyboxFt = "rbxassetid://159454299"
+            sky.SkyboxLf = "rbxassetid://159454299"
+            sky.SkyboxRt = "rbxassetid://159454299"
+            sky.SkyboxUp = "rbxassetid://159454299"
+            sky.Parent = Lighting
+        end
+    else
+        local sky = Lighting:FindFirstChild("NurikWare_Sky")
+        if sky then sky:Destroy() end
+    end
+
+    if Settings.PlayerGlow then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                local char = getPlayerCharacter(player)
+                if char and not char:FindFirstChild("NurikWare_Glow") then
+                    local hl = Instance.new("Highlight")
+                    hl.Name = "NurikWare_Glow"
+                    hl.Parent = char
+                    hl.Adornee = char
+                    hl.FillColor = Color3.fromRGB(255, 255, 255)
+                    hl.FillTransparency = 0.5
+                    hl.OutlineColor = Color3.fromRGB(255, 255, 0)
+                    hl.OutlineTransparency = 0
+                    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                end
+            end
+        end
+    else
+        for _, player in ipairs(Players:GetPlayers()) do
+            local char = getPlayerCharacter(player)
+            if char then
+                local hl = char:FindFirstChild("NurikWare_Glow")
+                if hl then hl:Destroy() end
+            end
+        end
+    end
+end
+
+-- ============================================
+-- ESP
+-- ============================================
+local function removeESPFor(player)
+    if CreatedHighlights[player] then
+        pcall(function() CreatedHighlights[player]:Destroy() end)
+        CreatedHighlights[player] = nil
+    end
+    local d = CreatedDrawings[player]
+    if d then
+        for _, obj in pairs(d) do
+            if typeof(obj) == "table" then
+                for _, line in ipairs(obj) do pcall(function() line:Remove() end) end
+            else
+                pcall(function() obj:Remove() end)
+            end
+        end
+        CreatedDrawings[player] = nil
+    end
+end
+
+local function getOrCreateDrawings(player)
+    if CreatedDrawings[player] then return CreatedDrawings[player] end
+    local d = {}
+    d.box       = Drawing.new("Square")
+    d.name      = Drawing.new("Text")
+    d.healthBg  = Drawing.new("Square")
+    d.health    = Drawing.new("Square")
+    d.dist      = Drawing.new("Text")
+    d.tracer    = Drawing.new("Line")
+    d.snapLine  = Drawing.new("Line")
+    d.weapon    = Drawing.new("Text")
+    d.skeleton  = {}
+    for i = 1, 15 do table.insert(d.skeleton, Drawing.new("Line")) end
+    CreatedDrawings[player] = d
+    return d
+end
+
+local function createHighlight(player, char)
+    if player == LocalPlayer or not char then return end
+    local hl = CreatedHighlights[player]
+    if not hl then
+        hl = Instance.new("Highlight")
+        hl.Name = "NurikWare_HL"
+        hl.Parent = char
+        hl.Adornee = char
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        CreatedHighlights[player] = hl
+    end
+    if Settings.ESPChamsMat == "Neon" then
+        hl.FillColor = Settings.ESPColor; hl.FillTransparency = 0.4
+    else
+        hl.FillColor = Settings.ESPColor; hl.FillTransparency = 0.8
+    end
+    hl.OutlineColor = Settings.ESPColor
+    hl.Enabled = Settings.ESPEnabled and Settings.ESPChams
+end
+
+local function getCharacterParts(char)
+    local parts = {}
+    for _, name in ipairs({
+        "Head","UpperTorso","LowerTorso","Torso",
+        "LeftUpperArm","LeftLowerArm","LeftHand",
+        "RightUpperArm","RightLowerArm","RightHand",
+        "LeftUpperLeg","LeftLowerLeg","LeftFoot",
+        "RightUpperLeg","RightLowerLeg","RightFoot",
+        "HumanoidRootPart"
+    }) do
+        local p = char:FindFirstChild(name)
+        if p and p:IsA("BasePart") then parts[name] = p end
+    end
+    return parts
+end
+
+local function drawSkeleton(d, char, color)
+    local parts = getCharacterParts(char)
+    local connections = {
+        {"Head","UpperTorso"}, {"UpperTorso","LowerTorso"},
+        {"UpperTorso","LeftUpperArm"}, {"LeftUpperArm","LeftLowerArm"}, {"LeftLowerArm","LeftHand"},
+        {"UpperTorso","RightUpperArm"}, {"RightUpperArm","RightLowerArm"}, {"RightLowerArm","RightHand"},
+        {"LowerTorso","LeftUpperLeg"}, {"LeftUpperLeg","LeftLowerLeg"}, {"LeftLowerLeg","LeftFoot"},
+        {"LowerTorso","RightUpperLeg"}, {"RightUpperLeg","RightLowerLeg"}, {"RightLowerLeg","RightFoot"},
+    }
+    for i, line in ipairs(d.skeleton) do
+        local pair = connections[i]
+        if pair then
+            local a, b = parts[pair[1]], parts[pair[2]]
+            if a and b then
+                local sa, onA = Camera:WorldToViewportPoint(a.Position)
+                local sb, onB = Camera:WorldToViewportPoint(b.Position)
+                if onA and onB then
+                    line.From = Vector2.new(sa.X, sa.Y); line.To = Vector2.new(sb.X, sb.Y)
+                    line.Color = color; line.Thickness = 1; line.Visible = true
+                else line.Visible = false end
+            else line.Visible = false end
+        else line.Visible = false end
+    end
+end
+
+local function updateESP()
+    if Unloaded then return end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local char = getPlayerCharacter(player)
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+            
+            local isTeam = false
+            if Settings.ESPTeamCheck and player.Team == LocalPlayer.Team then isTeam = true end
+
+            if not (char and hrp and humanoid and humanoid.Health > 0) or isTeam then
+                removeESPFor(player)
+            else
+                local dist = (Camera.CFrame.Position - hrp.Position).Magnitude
+                if dist > Settings.ESPMaxDistance or not Settings.ESPEnabled then
+                    local d = CreatedDrawings[player]
+                    if d then
+                        d.box.Visible = false; d.name.Visible = false; d.healthBg.Visible = false; d.health.Visible = false
+                        d.dist.Visible = false; d.tracer.Visible = false; d.snapLine.Visible = false; d.weapon.Visible = false
+                        for _, l in ipairs(d.skeleton) do l.Visible = false end
+                    end
+                    if CreatedHighlights[player] then CreatedHighlights[player].Enabled = false end
+                else
+                    if Settings.ESPChams then createHighlight(player, char)
+                    else if CreatedHighlights[player] then CreatedHighlights[player].Enabled = false end end
+                    
+                    local d = getOrCreateDrawings(player)
+                    local head = char:FindFirstChild("Head")
+                    if head then
+                        local headPos, onScreen = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                        local rootPos  = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 2.5, 0))
+                        
+                        if onScreen and headPos.Z > 0 then
+                            local height = math.abs(headPos.Y - rootPos.Y)
+                            local width  = height / 2
+                            
+                            d.box.Size = Vector2.new(width, height)
+                            d.box.Position = Vector2.new(headPos.X - width/2, headPos.Y)
+                            d.box.Color = Settings.ESPColor; d.box.Thickness = 1; d.box.Filled = false
+                            d.box.Visible = Settings.ESPBox
+
+                            d.name.Text = player.Name
+                            d.name.Position = Vector2.new(headPos.X, headPos.Y - 18)
+                            d.name.Size = 14; d.name.Center = true; d.name.Outline = true
+                            d.name.Color = Settings.ESPTextColor; d.name.Visible = Settings.ESPName
+
+                            -- РАБОЧАЯ ДИСТАНЦИЯ
+                            d.dist.Text = math.floor(dist) .. "m"
+                            d.dist.Position = Vector2.new(headPos.X + width/2 + 5, headPos.Y + height/2)
+                            d.dist.Size = 12; d.dist.Color = Settings.ESPTextColor
+                            d.dist.Visible = Settings.ESPDistance
+
+                            local hpPct = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+                            local hpColor = Color3.fromRGB(255 * (1 - hpPct), 255 * hpPct, 0)
+                            
+                            d.healthBg.Size = Vector2.new(3, height)
+                            d.healthBg.Position = Vector2.new(headPos.X - width/2 - 6, headPos.Y)
+                            d.healthBg.Color = Color3.fromRGB(0, 0, 0); d.healthBg.Filled = true
+                            d.healthBg.Visible = Settings.ESPHealth
+                            
+                            d.health.Size = Vector2.new(3, height * hpPct)
+                            d.health.Position = Vector2.new(headPos.X - width/2 - 6, headPos.Y + height * (1 - hpPct))
+                            d.health.Color = hpColor; d.health.Filled = true
+                            d.health.Visible = Settings.ESPHealth
+
+                            local screenSize = Camera.ViewportSize
+                            d.tracer.From = Vector2.new(screenSize.X/2, screenSize.Y)
+                            d.tracer.To   = Vector2.new(headPos.X, headPos.Y)
+                            d.tracer.Color = Settings.ESPColor; d.tracer.Thickness = 1
+                            d.tracer.Visible = Settings.ESPTracer
+
+                            d.snapLine.From = Vector2.new(screenSize.X/2, 0)
+                            d.snapLine.To   = Vector2.new(headPos.X, headPos.Y)
+                            d.snapLine.Color = Settings.ESPColor; d.snapLine.Thickness = 1
+                            d.snapLine.Visible = Settings.ESPSnapLine
+
+                            local tool = char:FindFirstChildOfClass("Tool")
+                            if tool then
+                                d.weapon.Text = tool.Name
+                                d.weapon.Position = Vector2.new(headPos.X, headPos.Y + height + 5)
+                                d.weapon.Size = 12; d.weapon.Center = true; d.weapon.Outline = true
+                                d.weapon.Color = Color3.fromRGB(255, 255, 0)
+                                d.weapon.Visible = Settings.ESPWeapon
+                            else
+                                d.weapon.Visible = false
+                            end
+
+                            if Settings.ESPSkeleton then drawSkeleton(d, char, Settings.ESPColor)
+                            else for _, l in ipairs(d.skeleton) do l.Visible = false end end
+                        else
+                            d.box.Visible = false; d.name.Visible = false; d.healthBg.Visible = false; d.health.Visible = false
+                            d.dist.Visible = false; d.tracer.Visible = false; d.snapLine.Visible = false; d.weapon.Visible = false
+                            for _, l in ipairs(d.skeleton) do l.Visible = false end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ============================================
+-- SELF CHAMS
+-- ============================================
+local function destroySelfSpheres()
+    for _, s in ipairs(SelfSpheres) do pcall(function() s:Destroy() end) end
+    clearTable(SelfSpheres)
+end
+
+local function createSelfSpheres()
+    destroySelfSpheres()
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    for i = 1, Settings.SelfCount do
+        local sphere = Instance.new("Part")
+        sphere.Name = "NurikWare_Sphere"
+        sphere.Shape = Enum.PartType.Ball
+        sphere.Size = Vector3.new(Settings.SelfSize, Settings.SelfSize, Settings.SelfSize)
+        sphere.Color = Settings.SelfColor
+        sphere.Material = (Settings.SelfMaterial == "Neon") and Enum.Material.Neon or Enum.Material.Glass
+        sphere.Anchored = true; sphere.CanCollide = false; sphere.CastShadow = false
+        sphere.Transparency = 0.1; sphere.Parent = workspace
+        table.insert(SelfSpheres, sphere)
+    end
+end
+
+local selfTime = 0
+local function updateSelfSpheres(dt)
+    if Unloaded or not Settings.SelfEnabled then
+        if #SelfSpheres > 0 then destroySelfSpheres() end
+        return
+    end
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    if #SelfSpheres ~= Settings.SelfCount then createSelfSpheres(); return end
+    
+    selfTime = selfTime + dt * Settings.SelfSpeed
+    local r = Settings.SelfRadius; local n = #SelfSpheres
+    for i, s in ipairs(SelfSpheres) do
+        if s.Parent then
+            s.Color = Settings.SelfColor
+            s.Material = (Settings.SelfMaterial == "Neon") and Enum.Material.Neon or Enum.Material.Glass
+            s.Size = Vector3.new(Settings.SelfSize, Settings.SelfSize, Settings.SelfSize)
+            local pos
+            if Settings.SelfMode == "Orbit" then
+                local angle = selfTime + (i * math.pi * 2 / n)
+                pos = root.Position + Vector3.new(math.cos(angle)*r, 0, math.sin(angle)*r)
+            elseif Settings.SelfMode == "Pulse" then
+                local angle = (i * math.pi * 2 / n); local pulse = (math.sin(selfTime * 2) + 1) / 2
+                pos = root.Position + Vector3.new(math.cos(angle)*r*pulse, 0, math.sin(angle)*r*pulse)
+            elseif Settings.SelfMode == "Ring" then
+                local angle = (i * math.pi * 2 / n)
+                pos = root.Position + Vector3.new(math.cos(angle)*r, math.sin(selfTime*2)*0.5, math.sin(angle)*r)
+            elseif Settings.SelfMode == "Spiral" then
+                local angle = selfTime + (i * math.pi * 2 / n); local y = math.sin(selfTime * 2 + i) * r
+                pos = root.Position + Vector3.new(math.cos(angle)*r, y, math.sin(angle)*r)
+            end
+            s.CFrame = CFrame.new(pos)
+        end
+    end
+end
+
+-- ============================================
+-- KILL AURA (ВОЗВРАЩЕН CLOSEST/ALL)
+-- ============================================
+local function getAttackRemote()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if not remotes then
+        local ok, res = pcall(function() return ReplicatedStorage:WaitForChild("Remotes", 1) end)
+        remotes = ok and res or nil
+    end
+    if not remotes then return nil end
+    return remotes:FindFirstChild("Attack")
+end
+local function getMyHRP()
+    local char = LocalPlayer.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then return char.HumanoidRootPart end
+    return nil
+end
+
+local function getClosestPlayer(radius)
+    local closest, closestDist = nil, math.huge
+    local myHRP = getMyHRP()
+    if not myHRP then return nil end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local char = getPlayerCharacter(player)
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hrp and hum and hum.Health > 0 then
+                local dist = (myHRP.Position - hrp.Position).Magnitude
+                if dist <= radius and dist < closestDist then
+                    closestDist = dist
+                    closest = player
+                end
+            end
+        end
+    end
+    return closest
+end
+
+local function getAllPlayersInRadius(radius)
+    local list = {}; local myHRP = getMyHRP()
+    if not myHRP then return list end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local char = getPlayerCharacter(player)
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            if hrp and hum and hum.Health > 0 then
+                if (myHRP.Position - hrp.Position).Magnitude <= radius then table.insert(list, player) end
+            end
+        end
+    end
+    return list
+end
+
+local function sendAttack(targetPlayer)
+    if not targetPlayer then return end
+    local now = os.clock()
+    if Settings.KALastHit[targetPlayer] and (now - Settings.KALastHit[targetPlayer]) < Settings.KAPerTargetCD then return end
+    
+    local char = getPlayerCharacter(targetPlayer); if not char then return end
+    local targetHRP = char:FindFirstChild("HumanoidRootPart"); local myHRP = getMyHRP()
+    if not (targetHRP and myHRP) then return end
+    
+    local attackRemote = getAttackRemote(); if not attackRemote then return end
+    local dir = (targetHRP.Position - myHRP.Position).Unit
+    local eye = myHRP.Position + Vector3.new(0, 1.5, 0)
+    
+    Settings.KAPacketCounter = Settings.KAPacketCounter + 1
+    local t = tick()
+    local args = {
+        [1] = char,
+        [2] = {
+            ["sprint"] = Settings.KASprint, ["charge"] = Settings.KACharge,
+            ["dir"] = dir, ["vt"] = t, ["t"] = t, ["eye"] = eye, ["vs"] = t,
+            ["crit"] = Settings.KACrit, ["n"] = Settings.KAPacketCounter,
+        }
+    }
+    pcall(function() attackRemote:FireServer(unpack(args)) end)
+    Settings.KALastHit[targetPlayer] = now
+end
+
+local function killAuraStep()
+    if Unloaded or not Settings.KAEnabled then return end
+    
+    local targets = {}
+    if Settings.KAMode == "Closest" then
+        local closest = getClosestPlayer(Settings.KARadius)
+        if closest then table.insert(targets, closest) end
+    else
+        targets = getAllPlayersInRadius(Settings.KARadius)
+    end
+
+    if #targets > 0 then
+        for _, target in ipairs(targets) do sendAttack(target) end
+    end
+end
+local function resetKillAura() Settings.KAPacketCounter = 5965; clearTable(Settings.KALastHit) end
+
+-- ============================================
+-- UNLOAD
+-- ============================================
+local function UnloadEverything()
+    if Unloaded then return end
+    Unloaded = true
+    for _, c in ipairs(Connections) do safeDisconnect(c) end
+    clearTable(Connections)
+    for player, _ in pairs(CreatedHighlights) do removeESPFor(player) end
+    for player, _ in pairs(CreatedDrawings) do removeESPFor(player) end
+    destroySelfSpheres()
+    
+    Lighting.Brightness = OriginalLighting.Brightness
+    Lighting.Ambient = OriginalLighting.Ambient
+    Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+    Lighting.FogEnd = OriginalLighting.FogEnd
+    Lighting.FogStart = OriginalLighting.FogStart
+    Lighting.FogColor = OriginalLighting.FogColor
+    Camera.FieldOfView = OriginalFOV
+    local sky = Lighting:FindFirstChild("NurikWare_Sky")
+    if sky then sky:Destroy() end
+    for _, player in ipairs(Players:GetPlayers()) do
+        local char = getPlayerCharacter(player)
+        if char then
+            local hl = char:FindFirstChild("NurikWare_Glow")
+            if hl then hl:Destroy() end
+        end
+    end
+
+    pcall(function() Rayfield:Destroy() end)
+end
+
+-- ============================================
+-- UI
+-- ============================================
+local Window = Rayfield:CreateWindow({
+   Name = "NurikWare",
+   LoadingTitle = "NurikWare",
+   LoadingSubtitle = "v6.1 | Fix Dist + Closest Mode",
+   ConfigurationSaving = { Enabled = true, FolderName = "NurikWare", FileName = "NurikWare_Config" },
+   KeySystem = false
+})
+
+local VisualTab = Window:CreateTab("Визуалы (MAX)", 4483362458)
+local WorldTab  = Window:CreateTab("Мир", 4483362458)
+local SelfTab    = Window:CreateTab("Self Chams", 4483362458)
+local KATab      = Window:CreateTab("Kill Aura", 4483362458)
+local MiscTab    = Window:CreateTab("Прочее", 4483362458)
+
+-- ===== ВИЗУАЛЫ =====
+VisualTab:CreateToggle({ Name = "Включить 3D ESP", CurrentValue = false, Flag = "ESPEnabled", Callback = function(v) Settings.ESPEnabled = v end })
+VisualTab:CreateColorPicker({ Name = "Цвет ESP", Color = Settings.ESPColor, Flag = "ESPColor", Callback = function(c) Settings.ESPColor = c end })
+VisualTab:CreateColorPicker({ Name = "Цвет текста", Color = Settings.ESPTextColor, Flag = "ESPTextColor", Callback = function(c) Settings.ESPTextColor = c end })
+VisualTab:CreateToggle({ Name = "Бокс (Box)", CurrentValue = true, Flag = "ESPBox", Callback = function(v) Settings.ESPBox = v end })
+VisualTab:CreateToggle({ Name = "Ник (Name)", CurrentValue = true, Flag = "ESPName", Callback = function(v) Settings.ESPName = v end })
+VisualTab:CreateToggle({ Name = "Здоровье (Health Bar)", CurrentValue = true, Flag = "ESPHealth", Callback = function(v) Settings.ESPHealth = v end })
+VisualTab:CreateToggle({ Name = "Дистанция", CurrentValue = true, Flag = "ESPDistance", Callback = function(v) Settings.ESPDistance = v end })
+VisualTab:CreateToggle({ Name = "Оружие (Weapon Name)", CurrentValue = true, Flag = "ESPWeapon", Callback = function(v) Settings.ESPWeapon = v end })
+VisualTab:CreateToggle({ Name = "Скелет (Skeleton)", CurrentValue = true, Flag = "ESPSkeleton", Callback = function(v) Settings.ESPSkeleton = v end })
+VisualTab:CreateToggle({ Name = "Линия (Tracer)", CurrentValue = false, Flag = "ESPTracer", Callback = function(v) Settings.ESPTracer = v end })
+VisualTab:CreateToggle({ Name = "Линия от прицела (Snap Line)", CurrentValue = false, Flag = "ESPSnapLine", Callback = function(v) Settings.ESPSnapLine = v end })
+VisualTab:CreateToggle({ Name = "Chams (заливка)", CurrentValue = true, Flag = "ESPChams", Callback = function(v) Settings.ESPChams = v end })
+VisualTab:CreateDropdown({ Name = "Материал Chams", Options = {"Neon","Glass"}, CurrentOption = {"Neon"}, Flag = "ESPChamsMat", Callback = function(o) Settings.ESPChamsMat = o[1] end })
+VisualTab:CreateToggle({ Name = "Не рисовать союзников", CurrentValue = false, Flag = "ESPTeamCheck", Callback = function(v) Settings.ESPTeamCheck = v end })
+VisualTab:CreateSlider({ Name = "Макс. дистанция ESP", Range = {50,3000}, Increment = 50, Suffix = "m", CurrentValue = 1000, Flag = "ESPMaxDistance", Callback = function(v) Settings.ESPMaxDistance = v end })
+
+-- ===== МИР =====
+WorldTab:CreateToggle({ Name = "Fullbright (убрать тени)", CurrentValue = false, Flag = "Fullbright", Callback = function(v) Settings.Fullbright = v; updateWorldVisuals() end })
+WorldTab:CreateToggle({ Name = "Убрать туман (No Fog)", CurrentValue = false, Flag = "NoFog", Callback = function(v) Settings.NoFog = v; updateWorldVisuals() end })
+WorldTab:CreateColorPicker({ Name = "Цвет освещения (Ambient)", Color = Settings.AmbientColor, Flag = "AmbientColor", Callback = function(c) Settings.AmbientColor = c; updateWorldVisuals() end })
+WorldTab:CreateToggle({ Name = "Звездное небо (Skybox)", CurrentValue = false, Flag = "CustomSky", Callback = function(v) Settings.CustomSky = v; updateWorldVisuals() end })
+WorldTab:CreateToggle({ Name = "Свечение игроков (Glow)", CurrentValue = false, Flag = "PlayerGlow", Callback = function(v) Settings.PlayerGlow = v end })
+WorldTab:CreateToggle({ Name = "Изменить FOV (Обзор)", CurrentValue = false, Flag = "FOVChanger", Callback = function(v) Settings.FOVChanger = v; updateWorldVisuals() end })
+WorldTab:CreateSlider({ Name = "Значение FOV", Range = {60, 120}, Increment = 1, CurrentValue = 90, Flag = "FOVValue", Callback = function(v) Settings.FOVValue = v; updateWorldVisuals() end })
+
+-- ===== SELF CHAMS =====
+SelfTab:CreateToggle({ Name = "Включить сферы", CurrentValue = false, Flag = "SelfEnabled", Callback = function(v) Settings.SelfEnabled = v; if not v then destroySelfSpheres() end end })
+SelfTab:CreateDropdown({ Name = "Режим", Options = {"Orbit","Pulse","Ring","Spiral"}, CurrentOption = {"Orbit"}, Flag = "SelfMode", Callback = function(o) Settings.SelfMode = o[1] end })
+SelfTab:CreateSlider({ Name = "Количество", Range = {1,12}, Increment = 1, CurrentValue = 3, Flag = "SelfCount", Callback = function(v) Settings.SelfCount = v end })
+SelfTab:CreateSlider({ Name = "Размер", Range = {0.2,3}, Increment = 0.1, CurrentValue = 1, Flag = "SelfSize", Callback = function(v) Settings.SelfSize = v end })
+SelfTab:CreateSlider({ Name = "Радиус", Range = {1,10}, Increment = 0.5, CurrentValue = 3, Flag = "SelfRadius", Callback = function(v) Settings.SelfRadius = v end })
+SelfTab:CreateSlider({ Name = "Скорость", Range = {0.5,10}, Increment = 0.5, CurrentValue = 2, Flag = "SelfSpeed", Callback = function(v) Settings.SelfSpeed = v end })
+SelfTab:CreateColorPicker({ Name = "Цвет сфер", Color = Settings.SelfColor, Flag = "SelfColor", Callback = function(c) Settings.SelfColor = c end })
+SelfTab:CreateDropdown({ Name = "Материал", Options = {"Neon","Glass"}, CurrentOption = {"Neon"}, Flag = "SelfMaterial", Callback = function(o) Settings.SelfMaterial = o[1] end })
+
+-- ===== KILL AURA =====
+KATab:CreateToggle({ Name = "Включить Kill Aura", CurrentValue = false, Flag = "KAEnabled", Callback = function(v) Settings.KAEnabled = v end })
+KATab:CreateDropdown({ Name = "Режим", Options = {"Closest", "All"}, CurrentOption = {"All"}, Flag = "KAMode", Callback = function(o) Settings.KAMode = o[1] end })
+KATab:CreateSlider({ Name = "Радиус атаки (MAX 1000)", Range = {5,1000}, Increment = 5, Suffix = "m", CurrentValue = 1000, Flag = "KARadius", Callback = function(v) Settings.KARadius = v end })
+KATab:CreateSlider({ Name = "Кулдаун на игрока (сек)", Range = {0.05, 2}, Increment = 0.05, Suffix = "сек", CurrentValue = 0.1, Flag = "KAPerTargetCD", Callback = function(v) Settings.KAPerTargetCD = v end })
+KATab:CreateToggle({ Name = "КРИТЫ", CurrentValue = true, Flag = "KACrit", Callback = function(v) Settings.KACrit = v end })
+KATab:CreateSlider({ Name = "Charge", Range = {1,5}, Increment = 1, CurrentValue = 5, Flag = "KACharge", Callback = function(v) Settings.KACharge = v end })
+KATab:CreateButton({ Name = "🔄 Переподключить", Callback = function() resetKillAura(); Rayfield:Notify({Title="NurikWare", Content="Сброшено.", Duration=3}) end })
+
+-- ===== ПРОЧЕЕ =====
+MiscTab:CreateButton({ Name = "🔴 UNLOAD", Callback = function() UnloadEverything() end })
+MiscTab:CreateLabel("Нажми DELETE чтобы открыть/закрыть меню.")
+
+-- ============================================
+-- БИНД НА DELETE
+-- ============================================
+local menuOpen = true
+addConnection(UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.Delete then
+        menuOpen = not menuOpen
+        pcall(function() if menuOpen then Rayfield:Open() else Rayfield:Close() end end)
+    end
+end))
+
+-- ============================================
+-- АВТО-СБРОС
+-- ============================================
+pcall(function()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotes then
+        local enterArena = remotes:FindFirstChild("EnterArena")
+        if enterArena then addConnection(enterArena.OnClientEvent:Connect(function() resetKillAura() end)) end
+    end
+end)
+
+addConnection(LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    resetKillAura()
+    if Settings.SelfEnabled then createSelfSpheres() end
+    if Settings.PlayerGlow then updateWorldVisuals() end
+end))
+
+-- ============================================
+-- ГЛАВНЫЙ ЦИКЛ
+-- ============================================
+addConnection(RunService.RenderStepped:Connect(function(dt)
+    if Unloaded then return end
+    updateESP()
+    updateSelfSpheres(dt)
+    killAuraStep()
+    updateWorldVisuals()
+end))
+
+Rayfield:Notify({
+   Title = "NurikWare v6.1",
+   Content = "Дистанция починена, режимы Closest/All возвращены!",
+   Duration = 6,
+   Image = 4483362458,
+})
